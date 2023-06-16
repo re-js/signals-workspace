@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "strict": false,
+    "esModuleInterop": true,
+    "allowJs": true,
+    "outDir": "dist"
+  },
+  "exclude": [
+    "*.js",
+    "**/*.js",
+    "node_modules",
+    "dist"
+  ]
+}
