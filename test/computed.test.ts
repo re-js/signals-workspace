@@ -87,7 +87,7 @@ test("computed should propogate change only if return value changed", () => {
   expect(spy).toHaveBeenLastCalledWith("b");
 });
 
-// test("should save consistent data", () => {
+// test("should keep consistency of data", () => {
 //   const spy = jest.fn();
 //   const a = signal(0);
 //   const n1 = computed(() => a() + 1);
