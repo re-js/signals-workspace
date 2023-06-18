@@ -1,8 +1,44 @@
+const { sync, sync_nodes } = require('./sync');
+
+//
+// Получается идея худшего алгоритма
+// При каждой записи даже в батче нужно находить все селекторы рекурсивно и помечать
+// неопределенными. Можно завести WeakMap где будут храниться все неопределенные селекторы
+// что бы их быстро определять и не идти глубже если уже был проход.
+//
+// При чтении. если я неопределенный селектор, то нужно меня определить.
+// Для этого нужно проверить изменилась ли хоть одна из моих зависимостей
+// от предыдущего закешированного значения.
+// Т.е. получается мне нужно хранить версии всех значений.
+//
+// Т.е. что бы при чтении понять нужно ли пересчитывать значение
+// придется иметь не только тех кого использую я, но и кто использует меня.
+// либо нужно где-то это хранить времененно.
+
+
+// ---------
+// Обратные ребра (edges) неопределенных селекторов хранятся в отдельной карте.
+// потому что неопределенные селекторы должны рекурсивно помечаться при записи сигналов.
+//
+// либо мы должны хранить обратные ребра всегда для computed и effect.
+// получится что эффекты и сигналы будут иметь только один набор ребер
+// так как находят по краям сети
+// а селекторы находятся внутри сети и потому будут хранить оба набора ребер
+// (видимо этого не избежать)
+
+//
+// !! Добавляем второй набор ребер для селекторов и эффектов
+// !! Так как при чтении селектора не удается придумать способ
+// !! удостовериться что в селекторе содержится актуальный кеш
+//
+
+
 let context_node;
 let untrack_phase = false;
 let batch_phase = false;
 
 class Signal {
+  is_signal = true;
   users = new Set();        // who using me
 
   constructor(value, eq = Object.is) {
@@ -14,7 +50,14 @@ class Signal {
     if (this.eq(v, this.value)) return;
     this.value = v;
     sync_nodes.add(this);
-    sync();
+    if (!batch_phase) sync();
+    else {
+      // we should mark selectors for check in any way
+      // because we can read selector durig the batch
+      // what is it the selector check.
+      // if should be recursive function who check all used selectors
+      // 
+    }
   }
 
   get() {
@@ -26,6 +69,7 @@ class Signal {
 }
 
 class Computed {  
+  is_computed = true;
   has_value = false;
   value;                    // value
   users = new Set();        // who using me
@@ -37,6 +81,9 @@ class Computed {
   }
 
   get() {
+    // Вот тут. если я неопределенный селектор, то нужно меня определить.
+    // Для этого нужно проверить изменилась ли хоть одна из моих зависимостей
+
     if (!this.valid) this.validate();
     if (context_node && !untrack_phase) {
       this.users.add(context_node);
@@ -44,11 +91,11 @@ class Computed {
     return this.value;
   }
 
-  check() {
+  refresh() {
     this.valid = false;
     // recalculate computed only if somebody used me
     if (!this.users.size) return;
-    this.validate();
+    return this.validate();
   }
 
   validate() {
@@ -56,6 +103,10 @@ class Computed {
     context_node = this;
     let v;
     try {
+      // у нас может измениться набор зависимостей
+      // но мы никак не сотрем те ноды, которые мы больше не используем
+      // т.е. мы должны все же хранить ноды в обе стороны, что бы сбросить
+      // зависимости перед запуском
       v = this.fn.call();
     } finally {
       context_node = stack;
@@ -67,14 +118,14 @@ class Computed {
     } 
     else if (!this.eq(v, this.value)) {
       this.value = v;
-
-      sync_nodes.add(this);
-      sync();
+      return true; // has_change
     }
   }
 }
 
 class Effect {
+  is_effect = true;
+
   constructor(fn) {
     this.fn = fn;           // effect body
   }
@@ -107,48 +158,7 @@ function batch(fn) {
     return fn();
   } finally {
     batch_phase = stack;
-    sync();
-  }
-}
-
-
-let sync_nest = 0;
-let sync_nodes = new Set();
-let computed_check = new Set();
-let effect_check = new Set();
-
-function sync() {
-  if (batch_phase) return;
-
-  sync_nodes.forEach((node) => {
-    node.users.forEach((n) => {
-      if (n.exec) {
-        effect_check.add(n);
-      } else {
-        computed_check.add(n);
-      }
-    });
-    node.users.clear();
-  });
-  sync_nodes.clear();
-
-  if (sync_nest) return;
-  sync_nest++;
-
-  try {
-    while (true) {
-      if (computed_check.size) {
-        const node = computed_check.values().next().value;
-        computed_check.delete(node);
-        node.check();
-      } else if (effect_check.size) {
-        const node = effect_check.values().next().value;
-        effect_check.delete(node);
-        node.exec();
-      } else break;
-    }
-  } finally {
-    sync_nest--;
+    if (!batch_phase) sync();
   }
 }
 
